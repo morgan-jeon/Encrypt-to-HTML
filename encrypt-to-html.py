@@ -2,6 +2,7 @@
 
 import base64
 import sys
+import hashlib
 import os
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
@@ -97,25 +98,24 @@ def render_template(template_file, output_file, context):
         <form id="decrypt-form">
             <span class="form-title">Decrypt {{ filename }}</span>
             <label for="password">Enter password:</label>
-            <input type="password" id="password" required value="0000000000000000">
+            <input type="password" id="password" required>
             <button type="submit">Decrypt and Download File</button>
         </form>
-         <script>
+        <script>
+            // The encrypted file data as a Base64-encoded data URL.
             const encryptedFileData = "{{ encrypted_data }}";
             const verifyData = "{{ verify_data }}";
 
             document.getElementById('decrypt-form').addEventListener('submit', function(event) {
                 event.preventDefault();
                 const password = document.getElementById('password').value;
-                if (password.length !== 16 && password.length !== 24 && password.length !== 32) {
-                    alert('Error: The key must be 16, 24, or 32 characters long.');
-                    return;
-                }
-                if (!verifyKey(verifyData, password)) {
+
+                if (!verifyKey(verifyData, CryptoJS.SHA256(password))) {
                     alert('Error: Key error, wrong password.')
                     return;
                 }
-                decryptAndDownloadFile(encryptedFileData, password);
+
+                decryptAndDownloadFile(encryptedFileData, CryptoJS.SHA256(password));
             });
 
             function verifyKey(verifyData, password) {
@@ -123,7 +123,7 @@ def render_template(template_file, output_file, context):
                 const verifyText = CryptoJS.enc.Base64.parse(verifyData.split(':')[0]);
                 const ivv = CryptoJS.lib.WordArray.create(verifyEnc.words.slice(0, 4));
                 const verifyCip = CryptoJS.lib.WordArray.create(verifyEnc.words.slice(4));
-                const verifyDec = CryptoJS.AES.decrypt({ciphertext: verifyCip}, CryptoJS.enc.Utf8.parse(password), { iv: ivv });
+                const verifyDec = CryptoJS.AES.decrypt({ciphertext: verifyCip}, password, { iv: ivv });
 
                 console.log(verifyText.words);
                 console.log(verifyDec.words);
@@ -136,7 +136,7 @@ def render_template(template_file, output_file, context):
                 const iv = CryptoJS.lib.WordArray.create(encryptedData.words.slice(0, 4));
                 const ciphertext = CryptoJS.lib.WordArray.create(encryptedData.words.slice(4));
 
-                const decryptedData = CryptoJS.AES.decrypt({ciphertext: ciphertext}, CryptoJS.enc.Utf8.parse(password), { iv: iv });
+                const decryptedData = CryptoJS.AES.decrypt({ciphertext: ciphertext}, password, { iv: iv });
 
                 const byteArray = new Uint8Array(decryptedData.words.length * 4);
                 for (let i = 0; i < decryptedData.words.length; i++) {
@@ -169,7 +169,6 @@ def render_template_from_file(template_file, output_file, context):
         file.write(template.render(context))
 
 if __name__ == "__main__":
-    sys.argv = ["en.py", "vps.html", "0000000000000000", "vps.enc.html"]
     if len(sys.argv) not in [3, 4, 5]:
         print("Usage: **.py <input_file> <key> [output_file] [output_template]")
         sys.exit(1)
@@ -185,9 +184,15 @@ if __name__ == "__main__":
     elif len(sys.argv) == 3:
         output_html = input_file + "-enc.html"
 
-    if len(key) not in (16, 24, 32):  # AES key must be 128, 192, or 256 bits
-        print("Error: The key must be 16, 24, or 32 characters long.")
-        sys.exit(1)
+    # if len(key) not in (16, 24, 32):  # AES key must be 128, 192, or 256 bits
+    #     print("Error: The key must be 16, 24, or 32 characters long.")
+    #     sys.exit(1)
+    try:
+        key = hashlib.sha256(key).digest()
+    except Exception as e:
+        print(f"Key hashing has failed.\n{e}")
+        sys.exit()
+
 
     encrypted_base64 = encrypt_aes_cbc(input_file, key)
     encrypted_data_url = f"data:application/octet-stream;base64,{encrypted_base64.decode()}"
@@ -197,15 +202,16 @@ if __name__ == "__main__":
     encrypted_verify = encrypt_aes_cbc_bin(verify_bit, key)
     verify_data = f"{verify_base64.decode()}:{encrypted_verify.decode()}"
 
+    filename = os.path.basename(input_file)
     context = {
         'encrypted_data': encrypted_data_url,
-        'filename': input_file,
+        'filename': filename,
         'verify_data': verify_data
     }
 
     if len(sys.argv) == 5:
         render_template_from_file(sys.argv[4], output_html, context)
     else:
-        render_template('enctemp.html', output_html, context)
+        render_template('', output_html, context)
 
     print(f"Encryption complete {output_html}")
